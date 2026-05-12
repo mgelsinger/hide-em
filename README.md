@@ -15,7 +15,7 @@ The rules engine is platform-agnostic. There is no site-specific code anywhere i
 - Not a thumbnail blocker — text matching only. If the title doesn't say "Mr Beast," the tile isn't hidden.
 - Not a community blocklist platform — your rules are your rules. JSON import/export is supported; sharing isn't a feature.
 
-See `docs/decisions.md` D-017 and the "Non-goals" section below for the long form.
+See the "Non-goals" section below for the long form.
 
 ## Status
 
@@ -69,7 +69,7 @@ __heDebug.kill()    // disable the scanner, disconnect the observer, remove all 
 __heDebug.unkill()  // re-enable
 ```
 
-It also self-terminates if any single drain exceeds 1s or cumulative scan time exceeds 60s, surfacing a structured `console.warn` with the relevant counters. This is a deliberate failure mode — see `docs/decisions.md` D-027 ("visible flash > blank page").
+It also self-terminates if any single drain exceeds 1s or cumulative scan time exceeds 60s, surfacing a structured `console.warn` with the relevant counters. This is a deliberate failure mode — visible flash > blank page.
 
 ## How it works (short version)
 
@@ -90,8 +90,6 @@ It also self-terminates if any single drain exceeds 1s or cumulative scan time e
 │  idle-callback yielding, kill-switches.    │
 └────────────────────────────────────────────┘
 ```
-
-Long version: [`docs/design.md`](docs/design.md). Why each design choice was made: [`docs/decisions.md`](docs/decisions.md).
 
 ## Development
 
@@ -118,10 +116,6 @@ src/
     options/              # React app: full blocklist management, import/export
   shared/                 # storage wrapper, shared types
 vite.config.ts            # manifest is defined inline here
-docs/
-  design.md               # architecture and rationale
-  decisions.md            # running log of non-obvious decisions
-  roadmap.md              # milestone plan (partially out-of-date; see notes)
 ```
 
 ### Architecture rules
@@ -130,8 +124,6 @@ docs/
 2. **No pre-hiding.** Items are visible by default. Hidden only on a positive match.
 3. **The engine never imports DOM types.** It is pure logic, testable in Node with no JSDOM and no Chrome API mocks.
 4. **Per-file soft cap: 200 lines.** Split when it grows past that.
-
-Full rules in `CLAUDE.md`.
 
 ### Tests
 

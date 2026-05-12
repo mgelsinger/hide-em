@@ -5,3 +5,7 @@ dist/
 .vite/
 .vscode/
 .idea/
+
+# Private project notes — kept locally, not published
+CLAUDE.md
+docs/
