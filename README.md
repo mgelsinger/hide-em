@@ -158,4 +158,4 @@ Explicit non-goals — these will not be added without an explicit request and s
 
 ## License
 
-Not yet chosen — see open question in the project root.
+MIT — see [LICENSE](LICENSE).
