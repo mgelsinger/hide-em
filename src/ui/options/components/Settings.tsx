@@ -1,31 +1,38 @@
 import React from 'react';
-import type { Settings } from '../../../shared/types.js';
+import type { Settings as SettingsType } from '../../../shared/types.js';
 
 interface Props {
-  settings: Settings;
-  onChange: (s: Settings) => void;
+  settings: SettingsType;
+  disabled: boolean;
+  onChange: (patch: Partial<SettingsType>) => void;
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: (value: boolean) => void }) {
   return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className="toggle" aria-label={label}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
       <span className="toggle-track" />
       <span className="toggle-thumb" />
     </label>
   );
 }
 
-export function Settings({ settings, onChange }: Props) {
+export function Settings({ settings, disabled, onChange }: Props) {
   return (
     <>
       <div className="setting-row">
-        <span className="setting-label">Extension enabled</span>
-        <Toggle checked={settings.enabled} onChange={(v) => onChange({ ...settings, enabled: v })} />
+        <span>
+          <strong className="setting-label">Extension enabled</strong>
+          <small>Pause or resume hiding on every site.</small>
+        </span>
+        <Toggle checked={settings.enabled} disabled={disabled} label="Extension enabled" onChange={(enabled) => onChange({ enabled })} />
       </div>
       <div className="setting-row">
-        <span className="setting-label">Debug logging</span>
-        <Toggle checked={settings.debug} onChange={(v) => onChange({ ...settings, debug: v })} />
+        <span>
+          <strong className="setting-label">Debug logging</strong>
+          <small>Show scanner details in the page console.</small>
+        </span>
+        <Toggle checked={settings.debug} disabled={disabled} label="Debug logging" onChange={(debug) => onChange({ debug })} />
       </div>
     </>
   );

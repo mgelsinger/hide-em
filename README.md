@@ -1,161 +1,107 @@
 # hide-em
 
-A personal attention filter for the web. You add names, keywords, or phrases. Matching content disappears from any site you visit, shortly after it appears. Text matching only. Fully local. No backend.
+hide-em is a local, site-agnostic attention filter for Chromium browsers. Add a name, keyword, phrase, or regular expression and hide-em removes matching content cards from pages as they appear.
 
-## What it is
+The extension has no backend, account, analytics, or cloud sync. Rules and settings stay in the browser profile where they were created. JSON import and export provide manual portability between devices and browsers.
 
-A Manifest V3 Chromium browser extension (Chrome, Brave, Edge, etc.) that runs a single universal content script on every page you load. The script walks text nodes, tests each against your blocklist, and on a match hides the nearest semantic card-like ancestor — `<article>`, `<li>`, ARIA `role="article"` / `role="listitem"`, or a custom element matching `*-RENDERER` / `*-CARD` (which catches YouTube tiles, Reddit cards, etc.).
+## Features
 
-The rules engine is platform-agnostic. There is no site-specific code anywhere in the codebase. Adding a new site is zero work.
+- Universal text scanning with no site-specific rules or selectors
+- Quick add popup from a normal click on the toolbar button
+- Full rule editing with aliases, whole-word matching, and case sensitivity
+- Optional regular expressions with validation for unsafe repetition patterns
+- Domain exclusions that include subdomains, useful for sites such as Twitch
+- Atomic JSON import with merge and replace modes
+- Confirmed local saves with a local recovery backup
+- Dynamic-page support for added content, changed text, and recycled cards
+- Responsive popup and settings layouts for smaller screens
 
-## What it isn't
+## Browser and account requirements
 
-- Not a moderation tool, recommendation engine, or content classifier — it's a tool for one user, doing exactly what they configured.
-- Not AI-based — exact text matching with Unicode normalization, no semantic models, no remote calls.
-- Not a thumbnail blocker — text matching only. If the title doesn't say "Mr Beast," the tile isn't hidden.
-- Not a community blocklist platform — your rules are your rules. JSON import/export is supported; sharing isn't a feature.
+hide-em uses standard Manifest V3 Chromium APIs and targets Chrome, Edge, Brave, and other compatible Chromium browsers. It does not require a Chrome account or browser sign-in. Each browser profile keeps an independent local configuration unless the user moves it with JSON export and import.
 
-See the "Non-goals" section below for the long form.
+Google Chrome currently limits Chrome Web Store extensions to computers and does not install them on mobile devices. See [Chrome Web Store Help](https://support.google.com/chrome_webstore/answer/1698338). The interface is responsive and ready for mobile Chromium browsers that provide compatible extension support, but hide-em cannot enable extension support in a browser that does not provide it.
 
-## Status
+## Install an unpacked development build
 
-- **Engine:** stable, 38 unit tests pass.
-- **Scanner:** stable on YouTube, Reddit, generic article sites. Hides via `display: none` on the matched card.
-- **Options page:** add/edit/delete rules, JSON import/export, debug toggle.
-- **Popup:** not built yet.
-- **Icons:** not designed yet — Chrome shows a generic puzzle icon.
-- **Web Store:** not submitted. Currently distributed only as an unpacked extension.
+1. Install dependencies and build the extension.
 
-## Install (unpacked, for personal use)
-
-1. Clone this repo and build:
    ```sh
    npm install
    npm run build
    ```
-2. Open `chrome://extensions` (or `brave://extensions`, `edge://extensions`).
-3. Toggle **Developer mode** on.
-4. Click **Load unpacked** and select the `dist/` folder.
-5. Click the extension's options entry (right-click the extension icon → **Options**) and add your first rule.
 
-The extension takes effect immediately on the next page load. Existing tabs need a refresh.
+2. Open the browser's extensions page, such as `chrome://extensions`, `edge://extensions`, or `brave://extensions`.
+3. Enable Developer mode.
+4. Choose Load unpacked and select the generated `dist/` directory.
+5. Pin hide-em to the toolbar if desired.
 
-## Usage
+Existing tabs may need one refresh after the extension is first installed or reloaded.
 
-Open the options page. Each rule has:
+## Use hide-em
 
-| Field | What it does |
-| --- | --- |
-| **Type** | `creator` / `keyword` / `phrase` / `regex` |
-| **Value** | The text to match (or a regex pattern, for `regex` type) |
-| **Aliases** | Alternative forms — all matched as if they were the value |
-| **Whole word** | `\b…\b` boundary — defaults to `true` for `creator` rules |
-| **Case sensitive** | Defaults to `false` |
-| **Scopes** | titles / channels / comments / descriptions — currently informational; the universal scanner tests all text against all scopes |
+Click the toolbar button to add a word or phrase quickly, pause the extension, or exclude the current site. Select Manage rules and exclusions for the full settings page. The browser's normal right-click menu for the extension also links to its options page.
 
-Use **Export** to download your rules as JSON; **Import** to round-trip them onto another machine.
+An excluded domain also excludes its subdomains. For example, excluding `twitch.tv` also excludes `www.twitch.tv` and `chat.twitch.tv`, but not `nottwitch.tv`.
 
-### Debug overlay
+Import validates the entire JSON file before changing the active configuration. Merge adds new rules and exclusions without duplicating equivalent entries. Replace overwrites rules, settings, and excluded domains only after validation succeeds.
 
-Enable **Debug** in Settings, then on any page press **Alt + Shift + D** to toggle a small overlay showing `scanned`, `hidden`, and last batch time. Useful for verifying the scanner is doing work.
+## Local storage and migration
 
-### Safety net (console)
+Version 1.1 stores the canonical configuration in `chrome.storage.local`. The background service worker is the only writer. It serializes changes, writes them, reads them back, and returns success only after verification. The visible UI does not add an item optimistically, so a failed save cannot look successful and then disappear after refresh.
 
-The scanner exposes `window.__heDebug` on every page:
+On the first run after upgrading from version 1.0, hide-em reads the old `chrome.storage.sync` rules and settings once and migrates valid data into local storage. It does not use sync for later changes. Invalid legacy rules are skipped without preventing valid rules from being recovered.
+
+## Rule matching
+
+Literal rules use Unicode normalization, collapse whitespace, remove zero-width characters, and ignore case unless case-sensitive matching is selected. Whole-word matching uses Unicode letter and number boundaries. Regex rules are compiled independently so capture groups and numeric backreferences keep their normal meaning.
+
+The scanner hides conservative card-like ancestors such as `article`, `li`, ARIA article and listitem roles, common card identifiers, and Chromium custom renderer elements. It avoids broad section and figure containers. Work is split into short idle batches. A single scan that exceeds the safety limit disables scanning on that page and clears all hides.
+
+For diagnostics, enable Debug logging and press Alt+Shift+D on a page. The page console also exposes:
 
 ```js
-__heDebug.stats     // live counters and state
-__heDebug.kill()    // disable the scanner, disconnect the observer, remove all hides
-__heDebug.unkill()  // re-enable
-```
-
-It also self-terminates if any single drain exceeds 1s or cumulative scan time exceeds 60s, surfacing a structured `console.warn` with the relevant counters. This is a deliberate failure mode — visible flash > blank page.
-
-## How it works (short version)
-
-```
-┌────────────────────────────────────────────┐
-│  Engine (src/engine/, src/shared/storage)  │
-│  Pure logic. Compiles rules to one regex   │
-│  per scope. No DOM imports.                │
-└────────────────────────────────────────────┘
-                    ▲
-                    │ "does this text match?"
-                    │
-┌────────────────────────────────────────────┐
-│  Universal scanner                         │
-│  (src/content/universal-scanner.ts)        │
-│  One content script, all sites.            │
-│  TreeWalker-free, per-child decomposition, │
-│  idle-callback yielding, kill-switches.    │
-└────────────────────────────────────────────┘
+__heDebug.stats
+__heDebug.kill()
+__heDebug.unkill()
+__heDebug.unhideAll()
 ```
 
 ## Development
 
 ```sh
-npm install
-npm run dev         # vite build --watch — rebuilds dist/ on file change
-npm run build       # one-shot production build
-npm run test        # vitest run — engine + shared utilities only
-npm run typecheck   # tsc --noEmit
+npm run dev          # Rebuild while files change
+npm run typecheck    # TypeScript strict-mode check
+npm run test         # Unit and DOM-target tests
+npm run build        # Production extension build
+npm run check        # Typecheck, tests, and production build
+npm run package      # Check and create hide-em-<version>.zip
 ```
 
-Reload the extension in `chrome://extensions` after each build (the reload icon on the card).
+The release archive contains the contents of `dist/` at its root and can be uploaded to a Chromium extension store.
 
 ### Repository layout
 
-```
+```text
 src/
-  background/             # service worker: storage subscriptions, lifecycle
-  engine/                 # pure matcher — NO DOM imports allowed
-  content/
-    universal-scanner.ts  # the one content script — runs on all sites
-    debug-overlay.ts      # optional stats overlay (Alt+Shift+D)
-  ui/
-    options/              # React app: full blocklist management, import/export
-  shared/                 # storage wrapper, shared types
-vite.config.ts            # manifest is defined inline here
+  background/          Serialized storage owner and legacy migration
+  content/             Universal dynamic-page scanner and target selection
+  engine/              Pure text normalization and matching
+  shared/              Types, validation, domains, protocol, and storage client
+  ui/options/          Full React settings interface
+  ui/popup/            Quick-add toolbar popup
+scripts/               Release packaging
+vite.config.ts         Manifest V3 definition and build configuration
 ```
 
-### Architecture rules
+## Architecture constraints
 
-1. **Universal scanner only.** One content script runs on all sites. No site-specific code anywhere.
-2. **No pre-hiding.** Items are visible by default. Hidden only on a positive match.
-3. **The engine never imports DOM types.** It is pure logic, testable in Node with no JSDOM and no Chrome API mocks.
-4. **Per-file soft cap: 200 lines.** Split when it grows past that.
-
-### Tests
-
-```sh
-npm run test
-```
-
-The engine has full coverage (rules, scopes, normalization edge cases including ZWJ, diacritics, fullwidth Unicode). The scanner is not unit-tested — it's DOM-coupled and JSDOM tests of `MutationObserver` behavior have low ROI. Verification is the kill-switch safety net + the debug overlay + manual smoke testing.
-
-## Non-goals
-
-Explicit non-goals — these will not be added without an explicit request and should never be introduced incrementally:
-
-- No image or thumbnail OCR
-- No face detection
-- No AI or semantic matching of any kind
-- No backend, telemetry, or cloud sync beyond `chrome.storage.sync`
-- No community blocklist sharing
-- No filtering of content you yourself authored
-- No "auto-suggest blocks" — you add rules, the extension applies them
-- No site-specific code paths or selectors
-
-## Tech stack
-
-- Manifest V3, Chromium-based browsers
-- TypeScript, strict mode
-- Vanilla DOM in the content script (no framework)
-- React for the options page (off the hot path)
-- `chrome.storage.sync` for rules, `chrome.storage.local` for hit counters
-- Bundler: Vite + `@crxjs/vite-plugin`
-- Tests: Vitest
+1. Scanning remains site agnostic. Do not introduce site-specific selectors or branches.
+2. Page content is visible until a positive text match is found.
+3. Matching logic remains independent of DOM and Chrome extension APIs.
+4. Only the background service worker writes the stored configuration.
+5. Page text and browsing history are never persisted or transmitted.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

@@ -1,148 +1,116 @@
 import React, { useEffect, useState } from 'react';
-import type { BlockRule, RuleType } from '../../../shared/types.js';
+import type { BlockRule, RuleDraft, RuleType } from '../../../shared/types.js';
+import { validateRuleDraft } from '../../../shared/validation.js';
 
 interface Props {
   initial: BlockRule | null;
-  onSave: (rule: BlockRule) => void;
+  disabled: boolean;
+  onSave: (draft: RuleDraft) => Promise<void>;
   onCancel: () => void;
 }
 
 const RULE_TYPES: RuleType[] = ['keyword', 'creator', 'phrase', 'regex'];
 
-function blankForm(): Partial<BlockRule> {
-  return {
-    type: 'keyword',
-    value: '',
-    aliases: [],
-    wholeWord: false,
-    caseSensitive: false,
-    enabled: true,
-  };
+function initialDraft(rule: BlockRule | null): RuleDraft {
+  return rule
+    ? {
+        type: rule.type,
+        value: rule.value,
+        aliases: rule.aliases,
+        caseSensitive: rule.caseSensitive,
+        wholeWord: rule.wholeWord,
+      }
+    : { type: 'keyword', value: '', aliases: [], caseSensitive: false, wholeWord: false };
 }
 
-export function RuleForm({ initial, onSave, onCancel }: Props) {
-  const [form, setForm] = useState<Partial<BlockRule>>(() =>
-    initial ? { ...initial } : blankForm(),
-  );
-  const [aliasText, setAliasText] = useState(() =>
-    initial ? initial.aliases.join(', ') : '',
-  );
+export function RuleForm({ initial, disabled, onSave, onCancel }: Props) {
+  const [draft, setDraft] = useState<RuleDraft>(() => initialDraft(initial));
+  const [aliasText, setAliasText] = useState(() => initial?.aliases.join(', ') ?? '');
   const [valueError, setValueError] = useState('');
 
   useEffect(() => {
-    setForm(initial ? { ...initial } : blankForm());
-    setAliasText(initial ? initial.aliases.join(', ') : '');
+    setDraft(initialDraft(initial));
+    setAliasText(initial?.aliases.join(', ') ?? '');
     setValueError('');
   }, [initial]);
 
-  function set<K extends keyof BlockRule>(key: K, val: BlockRule[K]) {
-    setForm((f) => {
-      const next = { ...f, [key]: val };
+  function set<K extends keyof RuleDraft>(key: K, value: RuleDraft[K]) {
+    setDraft((current) => {
+      const next = { ...current, [key]: value };
       if (key === 'type') {
-        next.wholeWord = val === 'creator';
+        next.wholeWord = value === 'creator';
       }
       return next;
     });
   }
 
-  const value = (form.value ?? '').trim();
-  const isShortAndSubstring = value.length > 0 && value.length < 4 && !form.wholeWord;
-  const isRegex = form.type === 'regex';
-
-  function validate(): boolean {
-    if (!value) { setValueError('Value is required.'); return false; }
-    if (isRegex) {
-      try { new RegExp(value); }
-      catch { setValueError('Invalid regular expression.'); return false; }
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const candidate: RuleDraft = {
+      ...draft,
+      value: draft.value.trim(),
+      aliases: aliasText.split(',').map((alias) => alias.trim()).filter(Boolean),
+    };
+    const result = validateRuleDraft(candidate);
+    if (!result.ok) {
+      setValueError(result.errors.join(' '));
+      return;
     }
     setValueError('');
-    return true;
+    await onSave(result.value);
   }
 
-  function handleSave() {
-    if (!validate()) return;
-    const rule: BlockRule = {
-      id: initial?.id ?? crypto.randomUUID(),
-      type: (form.type ?? 'keyword') as RuleType,
-      value,
-      aliases: aliasText
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      enabled: form.enabled ?? true,
-      caseSensitive: form.caseSensitive ?? false,
-      wholeWord: form.wholeWord ?? false,
-      platforms: 'all',
-      scope: { titles: true, channels: true, comments: true, descriptions: true },
-      action: 'hide',
-      hits: initial?.hits ?? 0,
-      createdAt: initial?.createdAt ?? Date.now(),
-      updatedAt: Date.now(),
-    };
-    onSave(rule);
-  }
+  const isRegex = draft.type === 'regex';
+  const shortSubstring = draft.value.trim().length > 0 && draft.value.trim().length < 4 && !draft.wholeWord;
 
   return (
-    <div className="rule-form">
+    <form className="rule-form" onSubmit={(event) => void handleSubmit(event)}>
       <p className="form-title">{initial ? 'Edit rule' : 'Add rule'}</p>
       <div className="form-grid">
-        {/* Value */}
         <div className="form-field span2">
-          <label htmlFor="rf-value">Value {isRegex && <span style={{ color: '#9d174d', fontWeight: 400 }}>(regex pattern)</span>}</label>
+          <label htmlFor="rf-value">Value {isRegex && <span className="label-help">(regular expression)</span>}</label>
           <input
             id="rf-value"
             type="text"
-            value={form.value ?? ''}
-            onChange={(e) => { set('value', e.target.value); setValueError(''); }}
+            value={draft.value}
+            onChange={(event) => { set('value', event.target.value); setValueError(''); }}
             className={valueError ? 'error' : ''}
-            placeholder={isRegex ? 'e.g. ep\\.?\\s*\\d+' : 'e.g. Kim Kardashian'}
+            placeholder={isRegex ? 'For example: ep\\.?\\s*\\d+' : 'For example: Kim Kardashian'}
             autoFocus
+            disabled={disabled}
           />
           {valueError && <span className="field-error">{valueError}</span>}
-          {isShortAndSubstring && !valueError && (
-            <span className="field-warning">⚠ Short rule with no word boundary — may hide many unrelated results.</span>
-          )}
+          {shortSubstring && !valueError && <span className="field-warning">A short substring may hide unrelated results. Consider whole word matching.</span>}
         </div>
 
-        {/* Type */}
         <div className="form-field span2">
           <label htmlFor="rf-type">Type</label>
-          <select id="rf-type" value={form.type ?? 'keyword'} onChange={(e) => set('type', e.target.value as RuleType)}>
-            {RULE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          <select id="rf-type" value={draft.type} disabled={disabled} onChange={(event) => set('type', event.target.value as RuleType)}>
+            {RULE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
           </select>
         </div>
 
-        {/* Aliases */}
         <div className="form-field span2">
-          <label htmlFor="rf-aliases">Aliases <span style={{ fontWeight: 400, color: '#9ca3af' }}>(comma-separated, optional)</span></label>
+          <label htmlFor="rf-aliases">Aliases <span className="label-help">(comma separated, optional)</span></label>
           <input
             id="rf-aliases"
             type="text"
             value={aliasText}
-            onChange={(e) => setAliasText(e.target.value)}
-            placeholder="e.g. @KimK, Kimberly Kardashian"
+            onChange={(event) => setAliasText(event.target.value)}
+            placeholder="For example: @KimK, Kimberly Kardashian"
+            disabled={disabled}
           />
         </div>
 
-        {/* Options */}
         <div className="form-field span2">
-          <label>Options</label>
+          <span className="field-label">Options</span>
           <div className="checkbox-group">
             <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.wholeWord ?? false}
-                onChange={(e) => set('wholeWord', e.target.checked)}
-                disabled={isRegex}
-              />
+              <input type="checkbox" checked={draft.wholeWord} onChange={(event) => set('wholeWord', event.target.checked)} disabled={disabled || isRegex} />
               Whole word
             </label>
             <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.caseSensitive ?? false}
-                onChange={(e) => set('caseSensitive', e.target.checked)}
-              />
+              <input type="checkbox" checked={draft.caseSensitive} onChange={(event) => set('caseSensitive', event.target.checked)} disabled={disabled} />
               Case sensitive
             </label>
           </div>
@@ -150,11 +118,9 @@ export function RuleForm({ initial, onSave, onCancel }: Props) {
       </div>
 
       <div className="form-actions">
-        <button className="btn btn-primary" onClick={handleSave}>
-          {initial ? 'Save changes' : 'Add rule'}
-        </button>
-        <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="btn btn-primary" disabled={disabled}>{initial ? 'Save changes' : 'Add rule'}</button>
+        <button type="button" className="btn btn-secondary" disabled={disabled} onClick={onCancel}>Cancel</button>
       </div>
-    </div>
+    </form>
   );
 }

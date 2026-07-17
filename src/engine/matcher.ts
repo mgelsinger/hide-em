@@ -1,221 +1,183 @@
 import { normalize } from './normalize.js';
-
-export type Platform = 'youtube' | 'twitter' | 'reddit' | 'twitch' | 'tiktok';
-export type RuleType = 'creator' | 'keyword' | 'phrase' | 'regex';
-export type HideAction = 'hide' | 'collapse' | 'blur';
-
-export type RuleScope = {
-  titles: boolean;
-  channels: boolean;
-  comments: boolean;
-  descriptions: boolean;
-};
-
-export type BlockRule = {
-  id: string;
-  type: RuleType;
-  value: string;
-  aliases: string[];
-  enabled: boolean;
-  caseSensitive: boolean;
-  wholeWord: boolean;
-  platforms: Platform[] | 'all';
-  scope: RuleScope;
-  action: HideAction;
-  hits: number;
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type CompiledRuleset = {
-  byScope: Record<keyof RuleScope, RegExp | null>;
-  byScopeCS: Record<keyof RuleScope, RegExp | null>;
-  ruleIndex: Map<string, BlockRule>;
-  groupToRuleId: Map<string, string>;
-  fingerprint: string;
-};
+import type { BlockRule } from '../shared/types.js';
+import { validateRegexPattern } from '../shared/validation.js';
 
 export type MatchResult =
   | { matched: false }
   | { matched: true; ruleId: string; matchedText: string };
 
-const SCOPES: Array<keyof RuleScope> = ['titles', 'channels', 'comments', 'descriptions'];
-const REGEX_MAX_LEN = 200;
-// Heuristic: reject patterns with nested quantifiers like (a+)+ or (.*)*
-const NESTED_QUANT_RE = /\([^()]*[+*][^()]*\)\s*[+*?{]/;
+type LiteralChunk = {
+  regex: RegExp;
+  groupToRuleId: Map<string, string>;
+};
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+type RegexRule = {
+  ruleId: string;
+  regex: RegExp;
+  caseSensitive: boolean;
+};
+
+export type CompiledRuleset = {
+  literalCI: LiteralChunk[];
+  literalCS: LiteralChunk[];
+  regexRules: RegexRule[];
+  ruleIndex: Map<string, BlockRule>;
+  fingerprint: string;
+};
+
+const LITERAL_CHUNK_SIZE = 50;
+const LITERAL_CHUNK_PATTERN_LENGTH = 20_000;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function patternForRule(rule: BlockRule): string | null {
-  if (rule.type === 'regex') {
-    const p = rule.value;
-    if (!p || p.length > REGEX_MAX_LEN) return null;
-    if (NESTED_QUANT_RE.test(p)) return null;
-    try {
-      new RegExp(p, rule.caseSensitive ? 'u' : 'iu');
-    } catch {
-      return null;
-    }
-    return `(?:${p})`;
-  }
-
+function literalPattern(rule: BlockRule): string | null {
   const values = [rule.value, ...rule.aliases]
-    .filter((v): v is string => typeof v === 'string' && v.length > 0)
-    .map((v) => normalize(v, rule.caseSensitive))
-    .filter((v) => v.length > 0)
+    .map((value) => normalize(value, rule.caseSensitive))
+    .filter(Boolean)
     .map(escapeRegex);
-
   if (values.length === 0) return null;
-
-  const alt = values.length === 1 ? values[0] : `(?:${values.join('|')})`;
-  return rule.wholeWord ? `\\b${alt}\\b` : alt;
+  const alternatives = values.length === 1 ? values[0] : `(?:${values.join('|')})`;
+  return rule.wholeWord
+    ? `(?<![\\p{L}\\p{N}_])${alternatives}(?![\\p{L}\\p{N}_])`
+    : alternatives;
 }
 
 function fingerprint(rules: BlockRule[]): string {
-  const parts = rules
-    .filter((r) => r.enabled)
-    .map((r) => {
-      const scopeKey = SCOPES.filter((s) => r.scope[s]).join('');
-      return `${r.id}:${r.type}:${r.value}:${r.aliases.join(',')}:` +
-        `${r.caseSensitive ? 1 : 0}:${r.wholeWord ? 1 : 0}:${scopeKey}`;
-    });
-  parts.sort();
-  let h = 0x811c9dc5;
-  const joined = parts.join('|');
+  const joined = rules
+    .filter((rule) => rule.enabled)
+    .map((rule) => JSON.stringify([
+      rule.id,
+      rule.type,
+      rule.value,
+      rule.aliases,
+      rule.caseSensitive,
+      rule.wholeWord,
+    ]))
+    .sort()
+    .join('|');
+  let hash = 0x811c9dc5;
   for (let i = 0; i < joined.length; i++) {
-    h ^= joined.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
+    hash ^= joined.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  return h.toString(16);
+  return hash.toString(16);
+}
+
+function compileLiteralChunks(entries: Array<{ rule: BlockRule; pattern: string }>): LiteralChunk[] {
+  const chunks: LiteralChunk[] = [];
+  let offset = 0;
+  while (offset < entries.length) {
+    const slice: Array<{ rule: BlockRule; pattern: string }> = [];
+    let patternLength = 0;
+    while (offset + slice.length < entries.length && slice.length < LITERAL_CHUNK_SIZE) {
+      const entry = entries[offset + slice.length];
+      if (slice.length > 0 && patternLength + entry.pattern.length > LITERAL_CHUNK_PATTERN_LENGTH) break;
+      slice.push(entry);
+      patternLength += entry.pattern.length;
+    }
+    const groupToRuleId = new Map<string, string>();
+    const parts = slice.map(({ rule, pattern }, index) => {
+      const groupName = `r${offset + index}`;
+      groupToRuleId.set(groupName, rule.id);
+      return `(?<${groupName}>${pattern})`;
+    });
+    const flags = slice[0]?.rule.caseSensitive ? 'u' : 'iu';
+    try {
+      chunks.push({ regex: new RegExp(parts.join('|'), flags), groupToRuleId });
+    } catch {
+      for (const { rule, pattern } of slice) {
+        const groupName = 'r0';
+        chunks.push({
+          regex: new RegExp(`(?<${groupName}>${pattern})`, rule.caseSensitive ? 'u' : 'iu'),
+          groupToRuleId: new Map([[groupName, rule.id]]),
+        });
+      }
+    }
+    offset += slice.length;
+  }
+  return chunks;
 }
 
 export function compile(rules: BlockRule[]): CompiledRuleset {
   const ruleIndex = new Map<string, BlockRule>();
-  const groupToRuleId = new Map<string, string>();
+  const ciEntries: Array<{ rule: BlockRule; pattern: string }> = [];
+  const csEntries: Array<{ rule: BlockRule; pattern: string }> = [];
+  const regexRules: RegexRule[] = [];
 
-  const partsByScope: Record<keyof RuleScope, { ci: string[]; cs: string[] }> = {
-    titles: { ci: [], cs: [] },
-    channels: { ci: [], cs: [] },
-    comments: { ci: [], cs: [] },
-    descriptions: { ci: [], cs: [] },
-  };
-
-  let groupCounter = 0;
   for (const rule of rules) {
     if (!rule.enabled) continue;
-    const pattern = patternForRule(rule);
-    if (pattern === null) continue;
-
-    const groupName = `r${groupCounter++}`;
-    let named: string;
-    try {
-      // Verify the named-group wrapped pattern compiles in isolation
-      new RegExp(`(?<${groupName}>${pattern})`, rule.caseSensitive ? 'u' : 'iu');
-      named = `(?<${groupName}>${pattern})`;
-    } catch {
+    if (rule.type === 'regex') {
+      for (const pattern of [rule.value, ...rule.aliases]) {
+        if (validateRegexPattern(pattern)) continue;
+        try {
+          regexRules.push({
+            ruleId: rule.id,
+            regex: new RegExp(pattern, rule.caseSensitive ? 'u' : 'iu'),
+            caseSensitive: rule.caseSensitive,
+          });
+          ruleIndex.set(rule.id, rule);
+        } catch {
+          continue;
+        }
+      }
       continue;
     }
 
+    const pattern = literalPattern(rule);
+    if (!pattern) continue;
+    (rule.caseSensitive ? csEntries : ciEntries).push({ rule, pattern });
     ruleIndex.set(rule.id, rule);
-    groupToRuleId.set(groupName, rule.id);
-
-    let added = false;
-    for (const scope of SCOPES) {
-      if (rule.scope[scope]) {
-        if (rule.caseSensitive) partsByScope[scope].cs.push(named);
-        else partsByScope[scope].ci.push(named);
-        added = true;
-      }
-    }
-    if (!added) {
-      ruleIndex.delete(rule.id);
-      groupToRuleId.delete(groupName);
-    }
-  }
-
-  const byScope: Record<keyof RuleScope, RegExp | null> = {
-    titles: null, channels: null, comments: null, descriptions: null,
-  };
-  const byScopeCS: Record<keyof RuleScope, RegExp | null> = {
-    titles: null, channels: null, comments: null, descriptions: null,
-  };
-
-  for (const scope of SCOPES) {
-    const ci = partsByScope[scope].ci;
-    const cs = partsByScope[scope].cs;
-    if (ci.length > 0) {
-      try { byScope[scope] = new RegExp(ci.join('|'), 'iu'); }
-      catch { byScope[scope] = null; }
-    }
-    if (cs.length > 0) {
-      try { byScopeCS[scope] = new RegExp(cs.join('|'), 'u'); }
-      catch { byScopeCS[scope] = null; }
-    }
   }
 
   return {
-    byScope,
-    byScopeCS,
+    literalCI: compileLiteralChunks(ciEntries),
+    literalCS: compileLiteralChunks(csEntries),
+    regexRules,
     ruleIndex,
-    groupToRuleId,
     fingerprint: fingerprint(rules),
   };
 }
 
-function findMatch(
-  regex: RegExp,
-  text: string,
-  groupToRuleId: Map<string, string>,
-): MatchResult {
-  const m = regex.exec(text);
-  if (!m) return { matched: false };
-  if (m.groups) {
-    for (const name of Object.keys(m.groups)) {
-      const value = m.groups[name];
-      if (value !== undefined) {
-        const ruleId = groupToRuleId.get(name);
-        if (ruleId !== undefined) {
-          return { matched: true, ruleId, matchedText: value };
-        }
-      }
+function testChunk(chunk: LiteralChunk, text: string): MatchResult {
+  const match = chunk.regex.exec(text);
+  if (!match) return { matched: false };
+  if (match.groups) {
+    for (const [name, value] of Object.entries(match.groups)) {
+      if (value === undefined) continue;
+      const ruleId = chunk.groupToRuleId.get(name);
+      if (ruleId) return { matched: true, ruleId, matchedText: value };
     }
-  }
-  return { matched: true, ruleId: '', matchedText: m[0] };
-}
-
-export function test(
-  compiled: CompiledRuleset,
-  text: string,
-  scope: keyof RuleScope,
-): MatchResult {
-  const ciRegex = compiled.byScope[scope];
-  const csRegex = compiled.byScopeCS[scope];
-  if (!ciRegex && !csRegex) return { matched: false };
-
-  if (ciRegex) {
-    const norm = normalize(text, false);
-    const r = findMatch(ciRegex, norm, compiled.groupToRuleId);
-    if (r.matched) return r;
-  }
-  if (csRegex) {
-    const norm = normalize(text, true);
-    const r = findMatch(csRegex, norm, compiled.groupToRuleId);
-    if (r.matched) return r;
   }
   return { matched: false };
 }
 
-export function testMulti(
-  compiled: CompiledRuleset,
-  fields: Partial<Record<keyof RuleScope, string>>,
-): MatchResult {
-  for (const scope of SCOPES) {
-    const text = fields[scope];
-    if (text === undefined) continue;
-    const r = test(compiled, text, scope);
-    if (r.matched) return r;
+export function test(compiled: CompiledRuleset, text: string): MatchResult {
+  if (compiled.ruleIndex.size === 0) return { matched: false };
+
+  let normalizedCI: string | null = null;
+  if (compiled.literalCI.length > 0 || compiled.regexRules.some((rule) => !rule.caseSensitive)) {
+    normalizedCI = normalize(text, false);
+  }
+  for (const chunk of compiled.literalCI) {
+    const result = testChunk(chunk, normalizedCI ?? '');
+    if (result.matched) return result;
+  }
+
+  let normalizedCS: string | null = null;
+  if (compiled.literalCS.length > 0 || compiled.regexRules.some((rule) => rule.caseSensitive)) {
+    normalizedCS = normalize(text, true);
+  }
+  for (const chunk of compiled.literalCS) {
+    const result = testChunk(chunk, normalizedCS ?? '');
+    if (result.matched) return result;
+  }
+
+  for (const entry of compiled.regexRules) {
+    const candidate = entry.caseSensitive ? normalizedCS ?? normalize(text, true) : normalizedCI ?? normalize(text, false);
+    const match = entry.regex.exec(candidate);
+    if (match) return { matched: true, ruleId: entry.ruleId, matchedText: match[0] };
   }
   return { matched: false };
 }

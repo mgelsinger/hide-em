@@ -1,173 +1,245 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { BlockRule, Settings } from '../../shared/types.js';
-import { DEFAULT_SETTINGS } from '../../shared/types.js';
-import { getRules, getSettings, onRulesChanged, onSettingsChanged, setRules, setSettings } from '../../shared/storage.js';
+import type { BlockRule, RuleDraft, StoredConfig } from '../../shared/types.js';
+import { createDefaultConfig } from '../../shared/types.js';
+import {
+  addExcludedDomain,
+  addRule,
+  applyImport,
+  createExportBundle,
+  deleteExcludedDomain,
+  deleteRule,
+  getConfig,
+  onConfigChanged,
+  setExcludedDomainEnabled,
+  setRuleEnabled,
+  updateRule,
+  updateSettings,
+} from '../../shared/storage.js';
+import { parseImport } from '../../shared/validation.js';
 import { RuleList } from './components/RuleList.js';
 import { RuleForm } from './components/RuleForm.js';
 import { Settings as SettingsPanel } from './components/Settings.js';
+import { ExcludedDomains } from './components/ExcludedDomains.js';
 
 type FormState = { open: false } | { open: true; editing: BlockRule | null };
+type ImportPreview = {
+  data: unknown;
+  rules: number;
+  domains: number;
+  warnings: string[];
+};
 
 export function App() {
-  const [rules, setLocalRules] = useState<BlockRule[]>([]);
-  const [settings, setLocalSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [config, setConfig] = useState<StoredConfig>(() => createDefaultConfig());
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState>({ open: false });
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [importError, setImportError] = useState('');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    void getRules().then(setLocalRules);
-    void getSettings().then(setLocalSettings);
-    const unsubRules = onRulesChanged(setLocalRules);
-    const unsubSettings = onSettingsChanged(setLocalSettings);
-    return () => { unsubRules(); unsubSettings(); };
+    let active = true;
+    void getConfig()
+      .then((next) => {
+        if (!active) return;
+        setConfig(next);
+        setLoaded(true);
+      })
+      .catch((reason: unknown) => {
+        if (!active) return;
+        setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    const unsubscribe = onConfigChanged((next) => {
+      if (!active) return;
+      setConfig(next);
+      setLoaded(true);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
-  const saveRules = useCallback(async (next: BlockRule[]) => {
-    setLocalRules(next);
-    await setRules(next);
-  }, []);
-
-  const saveSettings = useCallback(async (next: Settings) => {
-    setLocalSettings(next);
-    await setSettings(next);
+  const runMutation = useCallback(async (
+    operation: () => Promise<{ config: StoredConfig; message?: string }>,
+  ): Promise<boolean> => {
+    setBusy(true);
+    setError('');
+    setStatus('Saving...');
+    try {
+      const result = await operation();
+      setConfig(result.config);
+      setStatus(result.message ?? 'Saved.');
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setStatus('Save failed. Your previous configuration is still active.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }, []);
 
   function openAdd() { setForm({ open: true, editing: null }); }
   function openEdit(rule: BlockRule) { setForm({ open: true, editing: rule }); }
   function closeForm() { setForm({ open: false }); }
 
-  async function handleSave(rule: BlockRule) {
+  async function handleSave(draft: RuleDraft) {
     const editing = form.open ? form.editing : null;
-    const next = editing
-      ? rules.map((r) => (r.id === rule.id ? rule : r))
-      : [...rules, rule];
-    await saveRules(next);
-    closeForm();
-  }
-
-  async function handleDelete(id: string) {
-    await saveRules(rules.filter((r) => r.id !== id));
-  }
-
-  async function handleToggle(id: string, enabled: boolean) {
-    await saveRules(rules.map((r) => (r.id === id ? { ...r, enabled } : r)));
+    const saved = editing
+      ? await runMutation(() => updateRule({ ...editing, ...draft }))
+      : await runMutation(() => addRule(draft));
+    if (saved) closeForm();
   }
 
   function handleExport() {
-    const blob = new Blob(
-      [JSON.stringify({ schemaVersion: 1, exportedAt: Date.now(), rules }, null, 2)],
-      { type: 'application/json' },
-    );
+    const blob = new Blob([JSON.stringify(createExportBundle(config), null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `hide-em-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `hide-em-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
     URL.revokeObjectURL(url);
+    setStatus('Export created.');
   }
 
   function handleImportClick() {
-    setImportError('');
+    setError('');
+    setImportPreview(null);
     fileRef.current?.click();
   }
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
     if (!file) return;
-    e.target.value = '';
+    event.target.value = '';
     try {
-      const text = await file.text();
-      const data = JSON.parse(text) as unknown;
-      let imported: BlockRule[];
-      if (Array.isArray(data)) {
-        imported = data as BlockRule[];
-      } else if (data && typeof data === 'object' && 'rules' in data && Array.isArray((data as { rules: unknown }).rules)) {
-        imported = (data as { rules: BlockRule[] }).rules;
-      } else {
-        throw new Error('Unrecognized format');
-      }
-      if (imported.length === 0) { setImportError('File contains no rules.'); return; }
-      const merged = mergeRules(rules, imported);
-      await saveRules(merged);
-      setImportError('');
-    } catch (err) {
-      setImportError(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (file.size > 5_000_000) throw new Error('The selected file is too large. JSON imports are limited to 5 MB.');
+      const data = JSON.parse(await file.text()) as unknown;
+      const parsed = parseImport(data);
+      if (!parsed.ok) throw new Error(parsed.errors.join(' '));
+      setImportPreview({
+        data,
+        rules: parsed.value.rules.length,
+        domains: parsed.value.excludedDomains.length,
+        warnings: parsed.warnings,
+      });
+    } catch (reason) {
+      setError(`Import failed: ${reason instanceof Error ? reason.message : String(reason)}`);
     }
+  }
+
+  async function confirmImport(mode: 'merge' | 'replace') {
+    if (!importPreview) return;
+    const saved = await runMutation(() => applyImport(importPreview.data, mode));
+    if (saved) setImportPreview(null);
   }
 
   const editingRule = form.open ? form.editing : null;
 
   return (
-    <div>
+    <main>
       <header className="page-header">
-        <h1>hide-em</h1>
-        <span className="tagline">Personal attention filter</span>
+        <div>
+          <h1>hide-em</h1>
+          <p className="tagline">Personal attention filter</p>
+        </div>
+        <span className={`save-indicator${busy ? ' saving' : ''}`} aria-live="polite">
+          {loaded ? status : 'Loading...'}
+        </span>
       </header>
 
-      {/* Settings */}
-      <div className="card">
-        <div
-          className={`card-header${settingsOpen ? ' open' : ''}`}
-          onClick={() => setSettingsOpen((o) => !o)}
-          role="button"
+      {error && <div className="notice notice-error" role="alert">{error}</div>}
+
+      <section className="card">
+        <button
+          type="button"
+          className={`card-header card-header-button${settingsOpen ? ' open' : ''}`}
+          onClick={() => setSettingsOpen((open) => !open)}
           aria-expanded={settingsOpen}
         >
           <h2>Settings</h2>
-          <span className="chevron">▼</span>
-        </div>
+          <span className="chevron" aria-hidden="true">v</span>
+        </button>
         {settingsOpen && (
           <div className="card-body">
-            <SettingsPanel settings={settings} onChange={(s) => void saveSettings(s)} />
+            <SettingsPanel
+              settings={config.settings}
+              disabled={busy || !loaded}
+              onChange={(patch) => void runMutation(() => updateSettings(patch))}
+            />
           </div>
         )}
-      </div>
+      </section>
 
-      {/* Blocklist */}
-      <div className="card">
-        <div className="card-header" style={{ cursor: 'default' }}>
+      <section className="card">
+        <div className="card-header static">
           <h2>Blocklist</h2>
-          <span className="rule-count">{rules.length} rule{rules.length !== 1 ? 's' : ''}</span>
+          <span className="rule-count">{config.rules.length} rule{config.rules.length === 1 ? '' : 's'}</span>
         </div>
 
-        <div className="card-body" style={{ paddingBottom: 0 }}>
+        <div className="card-body toolbar-body">
           <div className="toolbar">
-            <button className="btn btn-primary" onClick={openAdd} disabled={form.open && editingRule === null}>
-              + Add rule
+            <button className="btn btn-primary" onClick={openAdd} disabled={busy || !loaded || (form.open && editingRule === null)}>
+              Add rule
             </button>
             <div className="import-export">
-              <button className="btn btn-secondary" onClick={handleImportClick}>↑ Import</button>
-              <button className="btn btn-secondary" onClick={handleExport} disabled={rules.length === 0}>↓ Export</button>
+              <button className="btn btn-secondary" onClick={handleImportClick} disabled={busy || !loaded}>Import JSON</button>
+              <button className="btn btn-secondary" onClick={handleExport} disabled={busy || !loaded}>Export JSON</button>
             </div>
-            <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleFileChange} />
+            <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(event) => void handleFileChange(event)} />
           </div>
-          {importError && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#dc2626' }}>{importError}</p>}
+
+          {importPreview && (
+            <div className="import-preview" role="status">
+              <p>Ready to import {importPreview.rules} rule{importPreview.rules === 1 ? '' : 's'} and {importPreview.domains} excluded domain{importPreview.domains === 1 ? '' : 's'}.</p>
+              {importPreview.warnings.map((warning, index) => <p key={`${index}-${warning}`} className="field-warning">{warning}</p>)}
+              <div className="form-actions">
+                <button className="btn btn-primary" disabled={busy} onClick={() => void confirmImport('merge')}>Merge</button>
+                <button className="btn btn-danger" disabled={busy} onClick={() => void confirmImport('replace')}>Replace everything</button>
+                <button className="btn btn-secondary" disabled={busy} onClick={() => setImportPreview(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
 
         {form.open && (
           <RuleForm
             initial={editingRule}
-            onSave={(r) => void handleSave(r)}
+            disabled={busy || !loaded}
+            onSave={handleSave}
             onCancel={closeForm}
           />
         )}
 
         <RuleList
-          rules={rules}
+          rules={config.rules}
+          disabled={busy || !loaded}
           onEdit={openEdit}
-          onDelete={(id) => void handleDelete(id)}
-          onToggle={(id, v) => void handleToggle(id, v)}
+          onDelete={(id) => void runMutation(() => deleteRule(id))}
+          onToggle={(id, enabled) => void runMutation(() => setRuleEnabled(id, enabled))}
         />
-      </div>
-    </div>
-  );
-}
+      </section>
 
-function mergeRules(existing: BlockRule[], imported: BlockRule[]): BlockRule[] {
-  const byId = new Map(existing.map((r) => [r.id, r]));
-  for (const r of imported) {
-    byId.set(r.id, r);
-  }
-  return Array.from(byId.values());
+      <section className="card">
+        <div className="card-header static">
+          <div>
+            <h2>Excluded sites</h2>
+            <p className="section-help">hide-em will not scan these domains or their subdomains.</p>
+          </div>
+          <span className="rule-count">{config.excludedDomains.length}</span>
+        </div>
+        <ExcludedDomains
+          domains={config.excludedDomains}
+          disabled={busy || !loaded}
+          onAdd={(input) => runMutation(() => addExcludedDomain(input))}
+          onDelete={(id) => void runMutation(() => deleteExcludedDomain(id))}
+          onToggle={(id, enabled) => void runMutation(() => setExcludedDomainEnabled(id, enabled))}
+        />
+      </section>
+    </main>
+  );
 }

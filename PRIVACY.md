@@ -1,48 +1,56 @@
-# Privacy Policy — hide-em
+# Privacy Policy for hide-em
 
-_Last updated: 2026-05-19_
+Last updated: July 15, 2026
 
-hide-em is a personal attention filter that runs entirely inside your browser. This document describes what the extension does and does not do with your data.
+hide-em is a personal attention filter that runs entirely inside the user's browser.
 
 ## Summary
 
-- hide-em does **not** collect, transmit, or sell any personal data.
-- hide-em does **not** include analytics, telemetry, crash reporting, or any form of remote logging.
-- hide-em does **not** make network requests to any server operated by the developer or by any third party.
-- All data the extension stores stays on your devices.
+- hide-em does not collect, transmit, sell, or share personal data.
+- hide-em has no analytics, telemetry, advertising, remote logging, or crash-reporting service.
+- hide-em makes no requests to a server operated by the developer or a third party.
+- hide-em does not require an account or browser sign-in.
+- Configuration stays in the local browser profile unless the user manually exports it as JSON.
 
-## What the extension stores
+## Data stored locally
 
-hide-em stores two kinds of data, both via the standard browser extension storage APIs:
+hide-em uses `chrome.storage.local` to store:
 
-1. **Your blocklist rules** — the names, keywords, phrases, and regular expressions you add, along with their associated settings (type, aliases, case sensitivity, whole-word, scopes, action). Stored via `chrome.storage.sync`, which means the browser may synchronize this data across browsers signed into the same browser account. This is a feature of the browser, not of the extension; the extension does not operate any sync server.
-2. **Local counters and settings** — per-rule hit counts and the debug toggle. Stored via `chrome.storage.local`, which never leaves the device.
+- Blocklist rules, aliases, and matching options
+- Extension enabled and debug settings
+- Excluded domain names
+- A small list of processed change identifiers used to prevent duplicate saves
+- A local configuration backup used to recover from corrupted storage
 
-The extension does not store the text of pages you visit, the URLs you visit, or any browsing history.
+This data is not synchronized by hide-em. A user can manually move configuration to another browser or device with JSON export and import.
 
-## How the extension processes page content
+When upgrading from an older release, hide-em may read its own legacy rules and settings from `chrome.storage.sync` once so it can copy them into local storage. New changes are not written to sync storage.
 
-To do its job, the extension reads visible text from the pages you load and tests that text against your rules. This processing happens entirely inside the content script running in your browser tab. No text is sent off-device, no text is persisted beyond the lifetime of the page, and no text is shared with any other process, extension, or server.
+## Page processing
+
+The extension reads page text in the active tab and compares it with locally stored rules. This work occurs inside the browser tab. Page text is not saved, transmitted, or shared.
+
+The toolbar popup reads the current page address in memory so it can show and manage a domain exclusion. hide-em stores only a domain the user explicitly chooses to exclude. It does not store paths, queries, page titles, or browsing history.
 
 ## Permissions
 
-- **`storage`** — required to save your blocklist rules and settings.
-- **Host permission `<all_urls>`** — required because the extension's purpose is to apply your rules on every site you visit. There is no per-site configuration; one content script runs on all pages.
+- `storage`: saves local rules, settings, exclusions, and the recovery backup.
+- Host access to `<all_urls>`: lets the universal content script apply user-created rules on web pages and lets the popup identify the current web domain. Users can exclude domains where scanning is not wanted.
 
-The extension does not request `tabs`, `webRequest`, `cookies`, `history`, `bookmarks`, or any other permission that would let it observe or modify browsing data beyond the matching it performs in-page.
+hide-em does not request the `tabs`, `webRequest`, `cookies`, `history`, or `bookmarks` permissions.
 
 ## Third parties
 
-The extension uses no third-party SDKs, analytics services, advertising networks, or hosted services of any kind.
+The extension contains no third-party analytics SDK, advertising network, hosted service, or remote-code dependency. Build-time open-source packages are bundled into the published extension where needed. No code is downloaded or executed remotely at runtime.
 
 ## Children
 
-The extension is not directed at children and does not knowingly collect any data from anyone, including children.
+hide-em is not directed at children and does not knowingly collect data from anyone.
 
 ## Changes
 
-If this policy changes, the updated text will be published in the extension's repository and the "Last updated" date above will be revised.
+If this policy changes, the updated policy and date will be published with the extension and in this repository.
 
 ## Contact
 
-Questions about this policy can be sent to: mgelsinger@proton.me
+Privacy questions can be sent to mgelsinger@proton.me.
