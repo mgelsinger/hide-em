@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { BlockRule, RuleDraft, StoredConfig } from '../../shared/types.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { BlockRule, RuleDraft, RuleType, StoredConfig } from '../../shared/types.js';
 import { createDefaultConfig } from '../../shared/types.js';
 import {
   addExcludedDomain,
@@ -20,6 +20,8 @@ import { RuleList } from './components/RuleList.js';
 import { RuleForm } from './components/RuleForm.js';
 import { Settings as SettingsPanel } from './components/Settings.js';
 import { ExcludedDomains } from './components/ExcludedDomains.js';
+import { filterRules } from './rule-filter.js';
+import type { RuleStateFilter, RuleTypeFilter } from './rule-filter.js';
 
 type FormState = { open: false } | { open: true; editing: BlockRule | null };
 type ImportPreview = {
@@ -38,6 +40,9 @@ export function App() {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [ruleQuery, setRuleQuery] = useState('');
+  const [ruleType, setRuleType] = useState<RuleTypeFilter>('all');
+  const [ruleState, setRuleState] = useState<RuleStateFilter>('all');
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -139,6 +144,12 @@ export function App() {
   }
 
   const editingRule = form.open ? form.editing : null;
+  const filteredRules = useMemo(() => filterRules(config.rules, {
+    query: ruleQuery,
+    type: ruleType,
+    state: ruleState,
+  }), [config.rules, ruleQuery, ruleState, ruleType]);
+  const filtersActive = Boolean(ruleQuery.trim() || ruleType !== 'all' || ruleState !== 'all');
 
   return (
     <main>
@@ -193,6 +204,46 @@ export function App() {
             <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={(event) => void handleFileChange(event)} />
           </div>
 
+          <div className="rule-filters" role="search" aria-label="Filter blocklist rules">
+            <div className="filter-search">
+              <label className="sr-only" htmlFor="rule-search">Search rules and aliases</label>
+              <input
+                id="rule-search"
+                type="search"
+                value={ruleQuery}
+                onChange={(event) => setRuleQuery(event.target.value)}
+                placeholder="Search rules and aliases"
+                disabled={!loaded}
+              />
+            </div>
+            <label>
+              <span className="sr-only">Rule type</span>
+              <select value={ruleType} disabled={!loaded} onChange={(event) => setRuleType(event.target.value as RuleTypeFilter)}>
+                <option value="all">All types</option>
+                {(['keyword', 'creator', 'phrase', 'regex'] as RuleType[]).map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Rule state</span>
+              <select value={ruleState} disabled={!loaded} onChange={(event) => setRuleState(event.target.value as RuleStateFilter)}>
+                <option value="all">All states</option>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </label>
+            {filtersActive && (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => { setRuleQuery(''); setRuleType('all'); setRuleState('all'); }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+          <p className="filter-count" aria-live="polite">
+            Showing {filteredRules.length} of {config.rules.length} rule{config.rules.length === 1 ? '' : 's'}
+          </p>
+
           {importPreview && (
             <div className="import-preview" role="status">
               <p>Ready to import {importPreview.rules} rule{importPreview.rules === 1 ? '' : 's'} and {importPreview.domains} excluded domain{importPreview.domains === 1 ? '' : 's'}.</p>
@@ -216,7 +267,10 @@ export function App() {
         )}
 
         <RuleList
-          rules={config.rules}
+          rules={filteredRules}
+          emptyMessage={config.rules.length === 0
+            ? 'No rules yet. Add one above to get started.'
+            : 'No rules match the current search and filters.'}
           disabled={busy || !loaded}
           onEdit={openEdit}
           onDelete={(id) => void runMutation(() => deleteRule(id))}

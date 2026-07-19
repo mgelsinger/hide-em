@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { BlockRule, RuleDraft, RuleType } from '../../../shared/types.js';
 import { validateRuleDraft } from '../../../shared/validation.js';
+import { MAX_RULE_TEST_TEXT_LENGTH, testRuleDraft } from '../../../engine/rule-tester.js';
 
 interface Props {
   initial: BlockRule | null;
@@ -27,11 +28,13 @@ export function RuleForm({ initial, disabled, onSave, onCancel }: Props) {
   const [draft, setDraft] = useState<RuleDraft>(() => initialDraft(initial));
   const [aliasText, setAliasText] = useState(() => initial?.aliases.join(', ') ?? '');
   const [valueError, setValueError] = useState('');
+  const [sampleText, setSampleText] = useState('');
 
   useEffect(() => {
     setDraft(initialDraft(initial));
     setAliasText(initial?.aliases.join(', ') ?? '');
     setValueError('');
+    setSampleText('');
   }, [initial]);
 
   function set<K extends keyof RuleDraft>(key: K, value: RuleDraft[K]) {
@@ -62,6 +65,12 @@ export function RuleForm({ initial, disabled, onSave, onCancel }: Props) {
 
   const isRegex = draft.type === 'regex';
   const shortSubstring = draft.value.trim().length > 0 && draft.value.trim().length < 4 && !draft.wholeWord;
+  const candidate: RuleDraft = useMemo(() => ({
+    ...draft,
+    value: draft.value.trim(),
+    aliases: aliasText.split(',').map((alias) => alias.trim()).filter(Boolean),
+  }), [aliasText, draft]);
+  const testOutcome = useMemo(() => testRuleDraft(candidate, sampleText), [candidate, sampleText]);
 
   return (
     <form className="rule-form" onSubmit={(event) => void handleSubmit(event)}>
@@ -114,6 +123,36 @@ export function RuleForm({ initial, disabled, onSave, onCancel }: Props) {
               Case sensitive
             </label>
           </div>
+        </div>
+      </div>
+
+      <div className="rule-tester">
+        <div className="tester-heading">
+          <div>
+            <span className="field-label">Test this rule</span>
+            <p>Paste sample text to test the unsaved rule. Sample text is never stored.</p>
+          </div>
+          <span className={`tester-result result-${testOutcome.status}`} aria-live="polite">
+            {testOutcome.status === 'empty' && 'Waiting for sample text'}
+            {testOutcome.status === 'invalid' && 'Rule needs attention'}
+            {testOutcome.status === 'no_match' && 'No match'}
+            {testOutcome.status === 'match' && 'Match'}
+          </span>
+        </div>
+        <label className="sr-only" htmlFor="rf-sample">Sample text</label>
+        <textarea
+          id="rf-sample"
+          value={sampleText}
+          maxLength={MAX_RULE_TEST_TEXT_LENGTH}
+          disabled={disabled}
+          onChange={(event) => setSampleText(event.target.value)}
+          placeholder="Paste a title, comment, or other sample text"
+          rows={3}
+        />
+        <div className="tester-detail">
+          <span>{sampleText.length.toLocaleString()} / {MAX_RULE_TEST_TEXT_LENGTH.toLocaleString()}</span>
+          {testOutcome.status === 'invalid' && <span className="field-error">{testOutcome.message}</span>}
+          {testOutcome.status === 'match' && <span>Matched: <code>{testOutcome.matchedText || '(empty match)'}</code></span>}
         </div>
       </div>
 

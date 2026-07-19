@@ -3,6 +3,7 @@ import type { BlockRule } from '../../../shared/types.js';
 
 interface Props {
   rules: BlockRule[];
+  emptyMessage?: string;
   disabled: boolean;
   onEdit: (rule: BlockRule) => void;
   onDelete: (id: string) => void;
@@ -54,8 +55,8 @@ function RuleItem({ rule, disabled, onEdit, onDelete, onToggle }: {
   );
 }
 
-export function RuleList({ rules, disabled, onEdit, onDelete, onToggle }: Props) {
-  if (rules.length === 0) return <div className="empty-state">No rules yet. Add one above to get started.</div>;
+export function RuleList({ rules, emptyMessage = 'No rules yet.', disabled, onEdit, onDelete, onToggle }: Props) {
+  if (rules.length === 0) return <div className="empty-state">{emptyMessage}</div>;
   return (
     <ul className="rule-list">
       {rules.map((rule) => (

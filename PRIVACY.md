@@ -1,6 +1,6 @@
 # Privacy Policy for hide-em
 
-Last updated: July 15, 2026
+Last updated: July 16, 2026
 
 hide-em is a personal attention filter that runs entirely inside the user's browser.
 
@@ -24,17 +24,25 @@ hide-em uses `chrome.storage.local` to store:
 
 This data is not synchronized by hide-em. A user can manually move configuration to another browser or device with JSON export and import.
 
+hide-em uses `chrome.storage.session` to hold temporary controls selected by the user:
+
+- Tab identifiers for tabs the user temporarily pauses
+- Hostnames the user pauses for 10 minutes or until browser restart
+- Creation and expiration times for those temporary pauses
+
+Session storage is held in memory and is cleared when the browser restarts, the extension is disabled, the extension updates, or the extension reloads. Temporary controls are not included in JSON exports. On older Chromium variants without session storage, hide-em uses a local fallback and removes it on browser startup.
+
 When upgrading from an older release, hide-em may read its own legacy rules and settings from `chrome.storage.sync` once so it can copy them into local storage. New changes are not written to sync storage.
 
 ## Page processing
 
 The extension reads page text in the active tab and compares it with locally stored rules. This work occurs inside the browser tab. Page text is not saved, transmitted, or shared.
 
-The toolbar popup reads the current page address in memory so it can show and manage a domain exclusion. hide-em stores only a domain the user explicitly chooses to exclude. It does not store paths, queries, page titles, or browsing history.
+The toolbar popup reads the current page address in memory so it can show scanner status and manage temporary pauses or a domain exclusion. hide-em stores only a hostname the user explicitly pauses or excludes. It does not store paths, queries, page titles, page text, hidden content, or browsing history.
 
 ## Permissions
 
-- `storage`: saves local rules, settings, exclusions, and the recovery backup.
+- `storage`: saves local rules, settings, exclusions, and the recovery backup, and holds temporary pause state in session memory.
 - Host access to `<all_urls>`: lets the universal content script apply user-created rules on web pages and lets the popup identify the current web domain. Users can exclude domains where scanning is not wanted.
 
 hide-em does not request the `tabs`, `webRequest`, `cookies`, `history`, or `bookmarks` permissions.

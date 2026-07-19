@@ -8,7 +8,12 @@ The extension has no backend, account, analytics, or cloud sync. Rules and setti
 
 - Universal text scanning with no site-specific rules or selectors
 - Quick add popup from a normal click on the toolbar button
+- Live current-page status and hidden-item count
+- Reveal all hidden content and pause the current tab
+- Temporary tab, timed-hostname, and browser-session pauses
 - Full rule editing with aliases, whole-word matching, and case sensitivity
+- Local rule testing before a rule is saved
+- Blocklist search and filters for larger rule collections
 - Optional regular expressions with validation for unsafe repetition patterns
 - Domain exclusions that include subdomains, useful for sites such as Twitch
 - Atomic JSON import with merge and replace modes
@@ -40,15 +45,27 @@ Existing tabs may need one refresh after the extension is first installed or rel
 
 ## Use hide-em
 
-Click the toolbar button to add a word or phrase quickly, pause the extension, or exclude the current site. Select Manage rules and exclusions for the full settings page. The browser's normal right-click menu for the extension also links to its options page.
+Click the toolbar button to see whether filtering is active, view the number of currently hidden items, add a word or phrase, pause filtering temporarily, or exclude the current site. Select Manage rules and exclusions for the full settings page. The browser's normal right-click menu for the extension also links to its options page.
+
+Temporary controls include:
+
+- Show all hidden items and pause the current tab until it closes
+- Pause the current hostname for 10 minutes
+- Pause the current hostname until the browser restarts
+
+Temporary pauses are held in browser session memory. They are not exported, synchronized, or added to browsing history. A tab pause follows navigation in the same tab and is removed when the tab closes.
 
 An excluded domain also excludes its subdomains. For example, excluding `twitch.tv` also excludes `www.twitch.tv` and `chat.twitch.tv`, but not `nottwitch.tv`.
 
 Import validates the entire JSON file before changing the active configuration. Merge adds new rules and exclusions without duplicating equivalent entries. Replace overwrites rules, settings, and excluded domains only after validation succeeds.
 
+The options page can search rule values, aliases, and types, then filter by rule type or enabled state. The add and edit form includes a sample-text tester that uses the production matcher. Sample text remains only in the form and is never stored.
+
 ## Local storage and migration
 
-Version 1.1 stores the canonical configuration in `chrome.storage.local`. The background service worker is the only writer. It serializes changes, writes them, reads them back, and returns success only after verification. The visible UI does not add an item optimistically, so a failed save cannot look successful and then disappear after refresh.
+Version 1.1 and later store the canonical configuration in `chrome.storage.local`. The background service worker is the only writer. It serializes changes, writes them, reads them back, and returns success only after verification. The visible UI does not add an item optimistically, so a failed save cannot look successful and then disappear after refresh.
+
+Version 1.2 stores temporary pauses in `chrome.storage.session`, which is memory-only and clears when the browser restarts, the extension updates, or the extension reloads. Browsers without session storage use a local fallback that is cleared at browser startup. Neither path uses browser-account synchronization.
 
 On the first run after upgrading from version 1.0, hide-em reads the old `chrome.storage.sync` rules and settings once and migrates valid data into local storage. It does not use sync for later changes. Invalid legacy rules are skipped without preventing valid rules from being recovered.
 
@@ -65,6 +82,7 @@ __heDebug.stats
 __heDebug.kill()
 __heDebug.unkill()
 __heDebug.unhideAll()
+__heDebug.rescan()
 ```
 
 ## Development
@@ -85,9 +103,9 @@ The release archive contains the contents of `dist/` at its root and can be uplo
 ```text
 src/
   background/          Serialized storage owner and legacy migration
-  content/             Universal dynamic-page scanner and target selection
-  engine/              Pure text normalization and matching
-  shared/              Types, validation, domains, protocol, and storage client
+  content/             Scanner lifecycle, dynamic scanning, and target selection
+  engine/              Pure text normalization, matching, and rule testing
+  shared/              Types, validation, protocols, temporary controls, and storage clients
   ui/options/          Full React settings interface
   ui/popup/            Quick-add toolbar popup
 scripts/               Release packaging

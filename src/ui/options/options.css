@@ -331,6 +331,36 @@ select:focus-visible {
 
 .form-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
 
+.rule-tester {
+  margin-top: 16px;
+  padding: 13px;
+  background: #f3f5fa;
+  border: 1px solid #dfe4ee;
+  border-radius: 8px;
+}
+
+.tester-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.tester-heading p { margin: 2px 0 9px; color: #7b8597; font-size: 11px; }
+.tester-result { flex: none; padding: 3px 7px; border-radius: 20px; color: #687386; background: #e5e9f0; font-size: 10px; font-weight: 700; }
+.result-match { color: #16643c; background: #dff6e8; }
+.result-no_match { color: #6c4c18; background: #fff0c9; }
+.result-invalid { color: #a5232c; background: #ffe2e5; }
+
+.rule-tester textarea {
+  width: 100%;
+  min-height: 78px;
+  resize: vertical;
+  padding: 8px 10px;
+  color: #182235;
+  background: #fff;
+  border: 1px solid #cbd2de;
+  border-radius: 7px;
+  font: inherit;
+}
+
+.tester-detail { display: flex; justify-content: space-between; gap: 12px; margin-top: 5px; color: #7d8798; font-size: 11px; }
+.tester-detail code { color: #263247; overflow-wrap: anywhere; }
+
 .setting-row {
   min-height: 58px;
   display: flex;
@@ -347,6 +377,27 @@ select:focus-visible {
 .setting-row small { color: #7d8798; font-size: 12px; }
 
 .import-export { display: flex; align-items: center; gap: 9px; margin-left: auto; }
+
+.rule-filters {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.rule-filters input,
+.rule-filters select {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px;
+  color: #263247;
+  background: #fff;
+  border: 1px solid #cbd2de;
+  border-radius: 7px;
+}
+
+.filter-count { margin: 7px 0 0; color: #7d8798; font-size: 11px; }
 
 .import-preview {
   margin-top: 13px;
@@ -396,6 +447,8 @@ select:focus-visible {
   .save-indicator { max-width: 45%; }
   .import-export { width: 100%; margin-left: 0; }
   .import-export .btn { flex: 1; }
+  .rule-filters { grid-template-columns: 1fr 1fr; }
+  .filter-search { grid-column: span 2; }
   .form-grid { grid-template-columns: 1fr; }
   .form-field.span2 { grid-column: span 1; }
   .rule-item { flex-wrap: wrap; }

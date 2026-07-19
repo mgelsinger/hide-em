@@ -1,4 +1,22 @@
 import { applyConfigCommand } from '../shared/config-operations.js';
+import { hostnameMatches } from '../shared/domains.js';
+import {
+  TEMPORARY_CONTROL_KEY,
+  clearSitePause,
+  clearTabPause,
+  isTemporaryControlCommand,
+  normalizePageHostname,
+  pruneExpiredPauses,
+  resolveTemporaryControl,
+  setSitePause,
+  setTabPause,
+  validateTemporaryControlState,
+} from '../shared/page-control.js';
+import type {
+  TemporaryControlCommand,
+  TemporaryControlResponse,
+  TemporaryControlState,
+} from '../shared/page-control.js';
 import { isConfigCommand } from '../shared/protocol.js';
 import type { CommandResponse, ConfigCommand } from '../shared/protocol.js';
 import {
@@ -82,20 +100,133 @@ async function handleCommand(command: ConfigCommand): Promise<CommandResponse> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-  if (!isConfigCommand(message)) return false;
-  void enqueue(() => handleCommand(message)).then(sendResponse);
-  return true;
+function temporaryStorageArea(): chrome.storage.StorageArea {
+  return typeof chrome.storage.session === 'undefined' ? chrome.storage.local : chrome.storage.session;
+}
+
+async function readTemporaryState(): Promise<TemporaryControlState> {
+  const area = temporaryStorageArea();
+  const stored = await area.get(TEMPORARY_CONTROL_KEY);
+  const state = validateTemporaryControlState(stored[TEMPORARY_CONTROL_KEY]);
+  const pruned = pruneExpiredPauses(state);
+  if (pruned.changed) await area.set({ [TEMPORARY_CONTROL_KEY]: pruned.state });
+  return pruned.state;
+}
+
+async function writeTemporaryState(state: TemporaryControlState): Promise<void> {
+  await temporaryStorageArea().set({ [TEMPORARY_CONTROL_KEY]: state });
+}
+
+async function refreshTab(tabId: number, resolution: ReturnType<typeof resolveTemporaryControl>): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'page.control.apply', resolution });
+  } catch {
+    // Restricted, discarded, or not-yet-loaded tabs will resolve state when their content script starts.
+  }
+}
+
+async function refreshHostname(hostname: string, state: TemporaryControlState): Promise<void> {
+  const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  await Promise.all(tabs.map(async (tab) => {
+    if (tab.id === undefined || !tab.url) return;
+    try {
+      const candidate = new URL(tab.url).hostname;
+      if (hostnameMatches(candidate, hostname)) {
+        await refreshTab(tab.id, resolveTemporaryControl(state, tab.id, candidate));
+      }
+    } catch {
+      return;
+    }
+  }));
+}
+
+async function handleTemporaryCommand(
+  command: TemporaryControlCommand,
+  sender: chrome.runtime.MessageSender,
+): Promise<TemporaryControlResponse> {
+  try {
+    const hostname = normalizePageHostname(command.hostname);
+    const tabId = 'tabId' in command && command.tabId !== undefined ? command.tabId : sender.tab?.id;
+    let state = await readTemporaryState();
+    let message: string | undefined;
+
+    switch (command.type) {
+      case 'temporary.get':
+        break;
+      case 'temporary.tab.set':
+        state = setTabPause(state, command.tabId);
+        await writeTemporaryState(state);
+        await refreshTab(command.tabId, resolveTemporaryControl(state, command.tabId, hostname));
+        message = 'This tab is paused.';
+        break;
+      case 'temporary.tab.clear':
+        state = clearTabPause(state, command.tabId);
+        await writeTemporaryState(state);
+        await refreshTab(command.tabId, resolveTemporaryControl(state, command.tabId, hostname));
+        message = 'This tab is active again.';
+        break;
+      case 'temporary.site.set':
+        state = setSitePause(state, hostname, command.duration);
+        await writeTemporaryState(state);
+        await refreshHostname(hostname, state);
+        message = command.duration === 'ten_minutes'
+          ? `${hostname} is paused for 10 minutes.`
+          : `${hostname} is paused until the browser restarts.`;
+        break;
+      case 'temporary.site.clear':
+        state = clearSitePause(state, hostname);
+        await writeTemporaryState(state);
+        await refreshHostname(hostname, state);
+        message = `${hostname} is active again.`;
+        break;
+    }
+
+    return { ok: true, resolution: resolveTemporaryControl(state, tabId, hostname), message };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function clearTemporaryFallback(): Promise<void> {
+  if (typeof chrome.storage.session === 'undefined') {
+    await chrome.storage.local.remove(TEMPORARY_CONTROL_KEY);
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  if (isConfigCommand(message)) {
+    void enqueue(() => handleCommand(message)).then(sendResponse);
+    return true;
+  }
+  if (isTemporaryControlCommand(message)) {
+    void enqueue(() => handleTemporaryCommand(message, sender)).then(sendResponse);
+    return true;
+  }
+  return false;
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void enqueue(async () => {
+    const state = await readTemporaryState();
+    const next = clearTabPause(state, tabId);
+    if (next !== state) await writeTemporaryState(next);
+  });
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  void enqueue(getOrMigrateConfig).catch((error) => {
+  void enqueue(async () => {
+    await clearTemporaryFallback();
+    return getOrMigrateConfig();
+  }).catch((error) => {
     console.error('[hide-em] configuration migration failed', error);
   });
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void enqueue(getOrMigrateConfig).catch((error) => {
+  void enqueue(async () => {
+    await clearTemporaryFallback();
+    return getOrMigrateConfig();
+  }).catch((error) => {
     console.error('[hide-em] configuration initialization failed', error);
   });
 });
